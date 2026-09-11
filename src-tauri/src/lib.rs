@@ -42,6 +42,13 @@ struct AppliedTarget {
     target: String,
     backup: Option<String>,
 }
+
+#[cfg(target_os = "windows")]
+#[derive(Serialize, Deserialize)]
+struct WindowsExtensionBackup {
+    version: u8,
+    old_direct_icon: Option<String>,
+}
 fn default_recursive_mode() -> String {
     "none".into()
 }
@@ -344,6 +351,12 @@ fn apply_icon(
     max_depth: Option<usize>,
 ) -> Result<IconRule, String> {
     validate_target(&target, &kind)?;
+    let mut settings = read_settings();
+    let existing = settings
+        .rules
+        .iter()
+        .find(|rule| rule.target == target && rule.kind == kind)
+        .cloned();
     let id = uuid::Uuid::new_v4().to_string();
     let icon_dir = data_dir()?.join("icons");
     fs::create_dir_all(&icon_dir).map_err(|e| e.to_string())?;
@@ -361,13 +374,22 @@ fn apply_icon(
     let mut applied_targets = Vec::with_capacity(targets.len());
     for path in targets {
         let value = path.to_string_lossy().into_owned();
-        let backup = apply_native(&value, &kind, &native_path, true)?;
+        let previous_backup = existing.as_ref().and_then(|rule| {
+            rule.applied_targets
+                .iter()
+                .find(|item| item.target == value)
+                .and_then(|item| item.backup.clone())
+        });
+        let backup = apply_native(&value, &kind, &native_path, previous_backup.is_none())?;
         applied_targets.push(AppliedTarget {
             target: value,
-            backup,
+            backup: previous_backup.or(backup),
         });
     }
-    let backup = applied_targets.first().and_then(|v| v.backup.clone());
+    let backup = existing
+        .as_ref()
+        .and_then(|rule| rule.backup.clone())
+        .or_else(|| applied_targets.first().and_then(|v| v.backup.clone()));
     let rule = IconRule {
         id,
         name,
@@ -383,7 +405,6 @@ fn apply_icon(
         max_depth,
         applied_targets,
     };
-    let mut settings = read_settings();
     settings
         .rules
         .retain(|r| !(r.target == rule.target && r.kind == rule.kind));
@@ -489,33 +510,40 @@ fn apply_native(
             .map_err(|e| e.to_string())?;
     } else {
         let ext = target.to_lowercase();
-        let prog_id = format!("IconCraft{}File", ext.trim_start_matches('.'));
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);
         let classes = hkcu
             .create_subkey("Software\\Classes")
             .map_err(|e| e.to_string())?
             .0;
-        let old_prog: Option<String> = classes
-            .open_subkey(&ext)
+        let old_direct_icon: Option<String> = classes
+            .open_subkey(format!("{}\\DefaultIcon", ext))
             .ok()
             .and_then(|k| k.get_value("").ok());
         backup = if capture_backup {
-            Some(serde_json::to_string(&old_prog).map_err(|e| e.to_string())?)
+            Some(
+                serde_json::to_string(&WindowsExtensionBackup {
+                    version: 1,
+                    old_direct_icon,
+                })
+                .map_err(|e| e.to_string())?,
+            )
         } else {
             None
         };
         classes
-            .create_subkey(&ext)
-            .map_err(|e| e.to_string())?
-            .0
-            .set_value("", &prog_id)
-            .map_err(|e| e.to_string())?;
-        classes
-            .create_subkey(format!("{}\\DefaultIcon", prog_id))
+            .create_subkey(format!("{}\\DefaultIcon", ext))
             .map_err(|e| e.to_string())?
             .0
             .set_value("", &format!("{},0", icon.display()))
             .map_err(|e| e.to_string())?;
+    }
+    unsafe {
+        windows_sys::Win32::UI::Shell::SHChangeNotify(
+            windows_sys::Win32::UI::Shell::SHCNE_ASSOCCHANGED as i32,
+            windows_sys::Win32::UI::Shell::SHCNF_IDLIST,
+            std::ptr::null(),
+            std::ptr::null(),
+        );
     }
     let _ = Command::new("ie4uinit.exe")
         .arg("-show")
@@ -632,18 +660,30 @@ fn restore_native(target: &str, kind: &str, backup: Option<&str>) -> Result<(), 
             .open_subkey_with_flags("Software\\Classes", winreg::enums::KEY_ALL_ACCESS)
             .map_err(|e| e.to_string())?;
         let ext = target.to_lowercase();
-        let prog_id = format!("IconCraft{}File", ext.trim_start_matches('.'));
-        let _ = classes.delete_subkey_all(&prog_id);
-        let old: Option<String> = backup.and_then(|v| serde_json::from_str(v).ok()).flatten();
-        if let Some(value) = old {
-            classes
-                .create_subkey(&ext)
-                .map_err(|e| e.to_string())?
-                .0
-                .set_value("", &value)
-                .map_err(|e| e.to_string())?;
+        if let Some(current) =
+            backup.and_then(|value| serde_json::from_str::<WindowsExtensionBackup>(value).ok())
+        {
+            let direct_icon = format!("{}\\DefaultIcon", ext);
+            if let Some(value) = current.old_direct_icon {
+                classes
+                    .create_subkey(&direct_icon)
+                    .map_err(|e| e.to_string())?
+                    .0
+                    .set_value("", &value)
+                    .map_err(|e| e.to_string())?;
+            } else {
+                let _ = classes.delete_subkey_all(&direct_icon);
+            }
         } else {
-            let _ = classes.delete_subkey_all(&ext);
+            let _ = classes.delete_subkey_all(format!("{}\\DefaultIcon", ext));
+        }
+        unsafe {
+            windows_sys::Win32::UI::Shell::SHChangeNotify(
+                windows_sys::Win32::UI::Shell::SHCNE_ASSOCCHANGED as i32,
+                windows_sys::Win32::UI::Shell::SHCNF_IDLIST,
+                std::ptr::null(),
+                std::ptr::null(),
+            );
         }
     }
     Ok(())
@@ -883,7 +923,18 @@ pub fn run() {
                     "quit" => app.exit(0),
                     _ => {}
                 })
-                .on_tray_icon_event(|tray, _| show_window(tray.app_handle()))
+                .on_tray_icon_event(|tray, event| {
+                    if matches!(
+                        event,
+                        tauri::tray::TrayIconEvent::Click {
+                            button: tauri::tray::MouseButton::Left,
+                            button_state: tauri::tray::MouseButtonState::Up,
+                            ..
+                        }
+                    ) {
+                        show_window(tray.app_handle());
+                    }
+                })
                 .build(app)?;
             if initial.monitor_enabled {
                 start_monitor(

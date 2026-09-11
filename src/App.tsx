@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Bell, Check, ChevronRight, Clock3, Egg, Folder, ImagePlus, Maximize2, Minus, MonitorCog, Palette, Plus, RefreshCw, RotateCcw, Settings, Sparkles, Trash2, Upload, X } from "lucide-react";
@@ -7,6 +7,11 @@ import type { AppSettings, EasterPreview, IconRule, TargetKind } from "./types";
 
 const DEFAULTS: AppSettings = { monitorEnabled: false, monitorIntervalMinutes: 10, autostart: false, rules: [] };
 const isTauri = () => "__TAURI_INTERNALS__" in window;
+const rulePreviewSrc = (path: string) => {
+  if (!isTauri()) return "";
+  const previewPath = path.toLowerCase().endsWith(".ico") ? `${path.slice(0, -4)}.png` : path;
+  return convertFileSrc(previewPath);
+};
 
 const STYLES = [
   { id: "mac-light", name: "macOS 浅色", os: "mac" }, { id: "mac-dark", name: "macOS 深色", os: "mac" },
@@ -343,7 +348,7 @@ export default function App() {
 <p>应用第一个图标后，可在这里还原。</p>
 <button className="primary small" onClick={()=>setTab("create")}>开始设计</button>
 </div> : settings.rules.map(rule => <div className="rule" key={rule.id}>
-<img src={isTauri() ? `asset://localhost/${encodeURI(rule.iconPath)}` : ""}/>
+<img src={rulePreviewSrc(rule.iconPath)}/>
 <div>
 <b>{rule.name}</b>
 <span>{rule.target}{rule.recursiveMode&&rule.recursiveMode!=="none"?` · ${rule.recursiveMode==="all"?"全部递归":`递归 ${rule.maxDepth} 层`}`:""}</span>
