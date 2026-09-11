@@ -1,0 +1,23 @@
+# Node / 前端构建
+node_modules/
+dist/
+
+# Rust / Tauri 构建
+src-tauri/target/
+
+# 本地环境与日志
+.env
+.env.*
+!.env.example
+*.log
+npm-debug.log*
+
+# 编辑器与系统文件
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# 临时文件
+*.tmp
+*.bak
