@@ -409,7 +409,9 @@ fn prepare_native_icon(png: &Path, id: &str) -> Result<PathBuf, String> {
     {
         let ico = png.with_file_name(format!("{id}.ico"));
         let image = image::open(png).map_err(|e| e.to_string())?;
+        // ICO 单层尺寸上限为 256，使用高质量缩放并保留透明通道。
         image
+            .resize_exact(256, 256, image::imageops::FilterType::Lanczos3)
             .save_with_format(&ico, image::ImageFormat::Ico)
             .map_err(|e| format!("生成 ICO 失败：{e}"))?;
         Ok(ico)

@@ -132,6 +132,14 @@ header span{font-size:12px;color:#7d8495}
 
 .path-row svg{width:14px}
 
+.target-chips{display:flex;flex-wrap:wrap;gap:7px;margin-top:9px;max-height:92px;overflow:auto}
+
+.target-chips>span{display:flex;align-items:center;gap:5px;max-width:100%;padding:5px 6px 5px 10px;border:1px solid #ded9fa;background:#f5f3ff;color:#654dde;border-radius:999px;font-size:9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+.target-chips>span>button{flex:0 0 auto;width:18px;height:18px;padding:0;border:0;border-radius:50%;background:#e4defc;color:#654dde;display:grid;place-items:center;cursor:pointer}
+
+.target-chips>span>button svg{width:10px;height:10px}
+
 
 .hint{color:#a56d24;background:#fff8e9;border-radius:7px;margin-top:9px;padding:7px 9px;font-size:9px}
 
