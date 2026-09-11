@@ -10,7 +10,7 @@ const isTauri = () => "__TAURI_INTERNALS__" in window;
 const rulePreviewSrc = (path: string) => {
   if (!isTauri()) return "";
   const previewPath = path.toLowerCase().endsWith(".ico") ? `${path.slice(0, -4)}.png` : path;
-  return convertFileSrc(previewPath);
+  return convertFileSrc(previewPath.replaceAll("\\", "/"));
 };
 
 const STYLES = [

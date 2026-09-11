@@ -48,6 +48,8 @@ struct AppliedTarget {
 struct WindowsExtensionBackup {
     version: u8,
     old_direct_icon: Option<String>,
+    prog_id: Option<String>,
+    old_prog_icon: Option<String>,
 }
 fn default_recursive_mode() -> String {
     "none".into()
@@ -480,7 +482,10 @@ fn apply_native(
     capture_backup: bool,
 ) -> Result<Option<String>, String> {
     use std::os::windows::process::CommandExt;
-    use winreg::{enums::HKEY_CURRENT_USER, RegKey};
+    use winreg::{
+        enums::{HKEY_CLASSES_ROOT, HKEY_CURRENT_USER},
+        RegKey,
+    };
     const NO_WINDOW: u32 = 0x08000000;
     if kind == "file" {
         return Err("Windows 单文件图标需使用资源管理器扩展；第一版请改用文件类型规则".into());
@@ -515,15 +520,41 @@ fn apply_native(
             .create_subkey("Software\\Classes")
             .map_err(|e| e.to_string())?
             .0;
+        let user_choice_prog_id = hkcu
+            .open_subkey(format!(
+                "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\{}\\UserChoice",
+                ext
+            ))
+            .ok()
+            .and_then(|key| key.get_value::<String, _>("ProgId").ok());
+        let registered_prog_id = classes
+            .open_subkey(&ext)
+            .ok()
+            .and_then(|key| key.get_value::<String, _>("").ok())
+            .or_else(|| {
+                RegKey::predef(HKEY_CLASSES_ROOT)
+                    .open_subkey(&ext)
+                    .ok()
+                    .and_then(|key| key.get_value::<String, _>("").ok())
+            });
+        let prog_id = user_choice_prog_id.or(registered_prog_id);
         let old_direct_icon: Option<String> = classes
             .open_subkey(format!("{}\\DefaultIcon", ext))
             .ok()
             .and_then(|k| k.get_value("").ok());
+        let old_prog_icon = prog_id.as_ref().and_then(|value| {
+            classes
+                .open_subkey(format!("{}\\DefaultIcon", value))
+                .ok()
+                .and_then(|key| key.get_value("").ok())
+        });
         backup = if capture_backup {
             Some(
                 serde_json::to_string(&WindowsExtensionBackup {
                     version: 1,
                     old_direct_icon,
+                    prog_id: prog_id.clone(),
+                    old_prog_icon,
                 })
                 .map_err(|e| e.to_string())?,
             )
@@ -536,6 +567,14 @@ fn apply_native(
             .0
             .set_value("", &format!("{},0", icon.display()))
             .map_err(|e| e.to_string())?;
+        if let Some(value) = prog_id {
+            classes
+                .create_subkey(format!("{}\\DefaultIcon", value))
+                .map_err(|e| e.to_string())?
+                .0
+                .set_value("", &format!("{},0", icon.display()))
+                .map_err(|e| e.to_string())?;
+        }
     }
     unsafe {
         windows_sys::Win32::UI::Shell::SHChangeNotify(
@@ -673,6 +712,19 @@ fn restore_native(target: &str, kind: &str, backup: Option<&str>) -> Result<(), 
                     .map_err(|e| e.to_string())?;
             } else {
                 let _ = classes.delete_subkey_all(&direct_icon);
+            }
+            if let Some(prog_id) = current.prog_id {
+                let prog_icon = format!("{}\\DefaultIcon", prog_id);
+                if let Some(value) = current.old_prog_icon {
+                    classes
+                        .create_subkey(&prog_icon)
+                        .map_err(|e| e.to_string())?
+                        .0
+                        .set_value("", &value)
+                        .map_err(|e| e.to_string())?;
+                } else {
+                    let _ = classes.delete_subkey_all(&prog_icon);
+                }
             }
         } else {
             let _ = classes.delete_subkey_all(format!("{}\\DefaultIcon", ext));
